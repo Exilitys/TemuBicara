@@ -99,6 +99,9 @@ interface PastEvent {
   title: string;
   event_type: string;
   date_time: string;
+  booking_id: string;
+  organizer_feedback?: string;
+  organizer_rating?: number;
   organizer: {
     full_name: string;
   };
@@ -385,6 +388,9 @@ const SpeakerDetail = () => {
         .from("bookings")
         .select(
           `
+          id,
+          organizer_feedback,
+          organizer_rating,
           event:events!event_id(
             id,
             title,
@@ -401,10 +407,15 @@ const SpeakerDetail = () => {
 
       if (error && error.code !== "PGRST116") throw error;
 
-      // Extract events from the nested structure
-      const events =
-        data?.map((booking: any) => booking.event).filter(Boolean) || [];
-      setPastEvents(events);
+      // Extract events from the nested structure and include feedback data
+      const eventsWithFeedback =
+        data?.map((booking: any) => ({
+          ...booking.event,
+          booking_id: booking.id,
+          organizer_feedback: booking.organizer_feedback,
+          organizer_rating: booking.organizer_rating,
+        })).filter(Boolean) || [];
+      setPastEvents(eventsWithFeedback);
     } catch (error) {
       console.error("Error fetching past events:", error);
     }
@@ -903,21 +914,47 @@ const SpeakerDetail = () => {
                     {pastEvents.map((event) => (
                       <div
                         key={event.id}
-                        className="flex items-center space-x-4 p-3 border rounded-lg"
+                        className="p-4 border rounded-lg"
                       >
-                        <Calendar className="h-5 w-5 text-muted-foreground" />
-                        <div className="flex-1">
-                          <h4 className="font-medium">{event.title}</h4>
-                          <div className="flex items-center space-x-2 text-sm text-muted-foreground">
-                            <Badge variant="outline" className="text-xs">
-                              {event.event_type}
-                            </Badge>
-                            <span>•</span>
-                            <span>
-                              Organized by {event.organizer.full_name}
-                            </span>
-                            <span>•</span>
-                            <span>{formatDate(event.date_time)}</span>
+                        <div className="flex items-start space-x-4">
+                          <Calendar className="h-5 w-5 text-muted-foreground mt-0.5" />
+                          <div className="flex-1">
+                            <h4 className="font-medium mb-2">{event.title}</h4>
+                            <div className="flex items-center space-x-2 text-sm text-muted-foreground mb-3">
+                              <Badge variant="outline" className="text-xs">
+                                {event.event_type}
+                              </Badge>
+                              <span>•</span>
+                              <span>
+                                Organized by {event.organizer.full_name}
+                              </span>
+                              <span>•</span>
+                              <span>{formatDate(event.date_time)}</span>
+                            </div>
+                            
+                            {/* Organizer Rating and Feedback */}
+                            {(event.organizer_rating || event.organizer_feedback) && (
+                              <div className="mt-3 p-3 bg-muted/50 rounded-lg">
+                                <div className="flex items-center space-x-2 mb-2">
+                                  <span className="text-sm font-medium text-muted-foreground">
+                                    Organizer Feedback:
+                                  </span>
+                                  {event.organizer_rating && (
+                                    <div className="flex items-center space-x-1">
+                                      {renderStars(event.organizer_rating)}
+                                      <span className="text-sm text-muted-foreground ml-1">
+                                        ({event.organizer_rating}/5)
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                                {event.organizer_feedback && (
+                                  <p className="text-sm text-muted-foreground italic">
+                                    "{event.organizer_feedback}"
+                                  </p>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>

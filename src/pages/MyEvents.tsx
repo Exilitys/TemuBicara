@@ -45,6 +45,8 @@ import {
   User,
   Plus,
   CreditCard,
+  Star,
+  MessageSquare,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -70,6 +72,8 @@ interface Booking {
   agreed_rate?: number;
   message?: string;
   created_at: string;
+  organizer_rating?: number;
+  organizer_feedback?: string;
   speaker: {
     id: string;
     hourly_rate?: number;
@@ -109,6 +113,20 @@ const MyEvents = () => {
     Booking[]
   >([]);
   const [bookingLoading, setBookingLoading] = useState(false);
+
+  // Review state
+  const [showReviewDialog, setShowReviewDialog] = useState(false);
+  const [selectedSpeaker, setSelectedSpeaker] = useState<{
+    speakerId: string;
+    speakerName: string;
+    eventTitle: string;
+    bookingId: string;
+  } | null>(null);
+  const [reviewForm, setReviewForm] = useState({
+    rating: 5,
+    feedback: "",
+  });
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   // Event creation dialog state
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -198,7 +216,45 @@ const MyEvents = () => {
         .order("date_time", { ascending: true });
 
       if (error) throw error;
-      setEvents(data || []);
+
+      // Auto-update event statuses based on current date
+      const now = new Date();
+      const eventsToUpdate = [];
+      
+      for (const event of data || []) {
+        const eventDate = new Date(event.date_time);
+        const eventEndTime = new Date(eventDate.getTime() + (event.duration_hours * 60 * 60 * 1000));
+        
+        // If event has ended and status is still "open" or "in_progress", mark as "finished"
+        if (eventEndTime < now && (event.status === "open" || event.status === "in_progress")) {
+          eventsToUpdate.push({
+            id: event.id,
+            status: "finished"
+          });
+        }
+      }
+
+      // Update event statuses if needed
+      if (eventsToUpdate.length > 0) {
+        for (const update of eventsToUpdate) {
+          await supabase
+            .from("events")
+            .update({ status: update.status })
+            .eq("id", update.id);
+        }
+
+        // Fetch updated events
+        const { data: updatedData, error: updateError } = await supabase
+          .from("events")
+          .select("*")
+          .eq("organizer_id", profile.id)
+          .order("date_time", { ascending: true });
+
+        if (updateError) throw updateError;
+        setEvents(updatedData || []);
+      } else {
+        setEvents(data || []);
+      }
     } catch (error) {
       console.error("Error fetching events:", error);
       toast({
@@ -466,6 +522,100 @@ const MyEvents = () => {
         ★
       </span>
     ));
+  };
+
+  // Render interactive stars for rating selection
+  const renderInteractiveStars = (currentRating: number, onRatingChange: (rating: number) => void) => {
+    return Array.from({ length: 5 }, (_, index) => (
+      <Star
+        key={index}
+        className={`h-6 w-6 cursor-pointer transition-colors ${
+          index < currentRating
+            ? "text-yellow-400 fill-current"
+            : "text-gray-300 hover:text-yellow-200"
+        }`}
+        onClick={() => onRatingChange(index + 1)}
+      />
+    ));
+  };
+
+  // Handle review submission
+  const handleSubmitReview = async () => {
+    if (!selectedSpeaker) return;
+
+    setReviewLoading(true);
+    try {
+      // Update the booking with organizer feedback and rating
+      const { error } = await supabase
+        .from("bookings")
+        .update({
+          organizer_feedback: reviewForm.feedback,
+          organizer_rating: reviewForm.rating,
+        })
+        .eq("id", selectedSpeaker.bookingId);
+
+      if (error) throw error;
+
+      toast({
+        title: "Review submitted successfully!",
+        description: `Thank you for reviewing ${selectedSpeaker.speakerName}`,
+      });
+
+      // Reset form and close dialog
+      setReviewForm({ rating: 5, feedback: "" });
+      setShowReviewDialog(false);
+      setSelectedSpeaker(null);
+
+      // Refresh the data
+      fetchConfirmedSpeakers();
+    } catch (error) {
+      console.error("Error submitting review:", error);
+      toast({
+        title: "Error submitting review",
+        description: "Please try again later",
+        variant: "destructive",
+      });
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
+  // Open review dialog for a speaker
+  const openReviewDialog = (speaker: any, eventTitle: string) => {
+    setSelectedSpeaker({
+      speakerId: speaker.speaker.id,
+      speakerName: speaker.speaker.profile.full_name,
+      eventTitle: eventTitle,
+      bookingId: speaker.id,
+    });
+    setShowReviewDialog(true);
+  };
+
+  // Mark event as finished
+  const markEventAsFinished = async (eventId: string) => {
+    try {
+      const { error } = await supabase
+        .from("events")
+        .update({ status: "finished" })
+        .eq("id", eventId);
+
+      if (error) throw error;
+
+      toast({
+        title: "Event marked as finished",
+        description: "The event has been moved to the completed tab",
+      });
+
+      // Refresh events
+      fetchMyEvents();
+    } catch (error) {
+      console.error("Error marking event as finished:", error);
+      toast({
+        title: "Error updating event",
+        description: "Please try again later",
+        variant: "destructive",
+      });
+    }
   };
 
   // Load topics for event creation
@@ -1558,6 +1708,29 @@ const MyEvents = () => {
                               )
                             );
                           })()}
+
+                          {/* Mark as Finished Button - for events that have passed but not marked as finished */}
+                          {(() => {
+                            const eventHasPassed =
+                              new Date(event.date_time).getTime() +
+                                2 * 60 * 60 * 1000 <
+                              Date.now();
+                            const isNotFinished = event.status !== "finished";
+
+                            return (
+                              eventHasPassed &&
+                              isNotFinished && (
+                                <Button
+                                  variant="secondary"
+                                  className="w-full mt-2"
+                                  onClick={() => markEventAsFinished(event.id)}
+                                >
+                                  <Clock className="mr-2 h-4 w-4" />
+                                  Mark as Finished
+                                </Button>
+                              )
+                            );
+                          })()}
                         </div>
                       </div>
                     </CardContent>
@@ -2009,6 +2182,45 @@ const MyEvents = () => {
                                 View Details
                               </Button>
                             </div>
+
+                            {/* Show speakers who can be reviewed */}
+                            {(() => {
+                              const eventSpeakers = getConfirmedBookingsForEvent(event.id);
+                              return eventSpeakers.length > 0 && (
+                                <div className="mt-3 pt-3 border-t">
+                                  <p className="text-sm font-medium mb-2">Review Speakers:</p>
+                                  <div className="space-y-2">
+                                    {eventSpeakers.map((speaker) => (
+                                      <div key={speaker.id} className="flex items-center justify-between p-2 bg-muted/50 rounded">
+                                        <div className="flex items-center space-x-2">
+                                          <div className="text-sm font-medium">
+                                            {speaker.speaker.profile.full_name}
+                                          </div>
+                                          {speaker.organizer_rating && (
+                                            <div className="flex items-center">
+                                              {renderStars(speaker.organizer_rating)}
+                                              <span className="text-xs text-muted-foreground ml-1">
+                                                Reviewed
+                                              </span>
+                                            </div>
+                                          )}
+                                        </div>
+                                        {!speaker.organizer_rating && (
+                                          <Button
+                                            size="sm"
+                                            variant="default"
+                                            onClick={() => openReviewDialog(speaker, event.title)}
+                                          >
+                                            <Star className="mr-1 h-3 w-3" />
+                                            Review
+                                          </Button>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </CardContent>
                       </Card>
@@ -2019,6 +2231,76 @@ const MyEvents = () => {
             })()}
           </TabsContent>
         </Tabs>
+
+        {/* Review Dialog */}
+        <Dialog open={showReviewDialog} onOpenChange={setShowReviewDialog}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Review Speaker</DialogTitle>
+              <DialogDescription>
+                {selectedSpeaker && (
+                  <>
+                    Rate and review {selectedSpeaker.speakerName} for their performance at "{selectedSpeaker.eventTitle}"
+                  </>
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Rating</Label>
+                <div className="flex items-center space-x-1">
+                  {renderInteractiveStars(reviewForm.rating, (rating) =>
+                    setReviewForm({ ...reviewForm, rating })
+                  )}
+                  <span className="ml-2 text-sm text-muted-foreground">
+                    {reviewForm.rating}/5 stars
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="feedback">Feedback (Optional)</Label>
+                <Textarea
+                  id="feedback"
+                  value={reviewForm.feedback}
+                  onChange={(e) =>
+                    setReviewForm({ ...reviewForm, feedback: e.target.value })
+                  }
+                  placeholder="Share your experience working with this speaker..."
+                  className="min-h-[100px]"
+                />
+              </div>
+
+              <div className="flex space-x-3 pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setShowReviewDialog(false);
+                    setReviewForm({ rating: 5, feedback: "" });
+                    setSelectedSpeaker(null);
+                  }}
+                  className="flex-1"
+                  disabled={reviewLoading}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSubmitReview}
+                  disabled={reviewLoading}
+                  className="flex-1"
+                >
+                  {reviewLoading && (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  )}
+                  Submit Review
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
       </div>
     </div>
   );
